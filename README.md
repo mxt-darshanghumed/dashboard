@@ -11,12 +11,10 @@ Uses your existing Claude Code subscription auth — no API key needed.
 
 YOU will need to create a JIRA api key(basic) and an .env file and add key to the .env file
 here is the template for env file. 
+
 -------------------------------
-# Server config
 PORT=3001
 DATABASE_PATH=./data/cockpit.db
-
-# Jira / Atlassian
 JIRA_SITE=maxxton.atlassian.net
 JIRA_EMAIL=youremail@maxxton.com
 JIRA_API_TOKEN=<your token>
