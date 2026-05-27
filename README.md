@@ -9,18 +9,6 @@ Uses your existing Claude Code subscription auth — no API key needed.
 - **Backend:** Node + TypeScript + Express + WebSocket + Claude Agent SDK + SQLite
 - **Frontend:** Vite + React + TypeScript + Tailwind + shadcn/ui
 
-YOU will need to create a JIRA api key(basic) and an .env file and add key to the .env file
-here is the template for env file. 
-
--------------------------------
-PORT=3001
-DATABASE_PATH=./data/cockpit.db
-JIRA_SITE=maxxton.atlassian.net
-JIRA_EMAIL=youremail@maxxton.com
-JIRA_API_TOKEN=<your token>
-JIRA_AUTH_TYPE=basic
-------------------------------
-
 ## Quick start
 
 ```bash
