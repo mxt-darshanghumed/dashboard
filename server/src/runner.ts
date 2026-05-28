@@ -30,7 +30,10 @@ export async function runAgent({
     prompt: userPrompt,
     options: {
       systemPrompt: agent.systemPrompt,
-      allowedTools: agent.allowedTools,
+      ...(agent.allowedTools !== undefined ? { allowedTools: agent.allowedTools } : {}),
+      ...(agent.permissionMode ? { permissionMode: agent.permissionMode } : {}),
+      ...(agent.settingSources ? { settingSources: agent.settingSources } : {}),
+      ...(agent.cwd ? { cwd: agent.cwd } : {}),
       ...(resumeSessionId ? { resume: resumeSessionId } : {}),
     },
   })) {
