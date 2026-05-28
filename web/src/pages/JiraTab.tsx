@@ -34,6 +34,7 @@ import { queryKeys } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { PrCard, buildPrIndex } from "@/components/PrCard";
 import { TicketNote } from "@/components/TicketNote";
+import { ProgressSection } from "@/components/ProgressSection";
 import {
   statusCardBackground,
   statusPillStyle,
@@ -468,7 +469,13 @@ function TicketCard({ issue, linkedPRs }: { issue: JiraIssueItem; linkedPRs: Pul
         </div>
       </Link>
 
-      <div className="border-t border-[var(--color-border-subtle)] bg-[color-mix(in_oklch,var(--color-bg)_60%,transparent)]">
+      <ProgressSection
+        ticketKey={issue.key}
+        statusName={issue.statusName}
+        statusCategory={issue.statusCategory}
+      />
+
+      <div className="bg-[color-mix(in_oklch,var(--color-bg)_60%,transparent)]">
         {linkedPRs.length === 0 ? (
           <div className="px-4 py-3 flex items-center gap-2 text-xs text-[var(--color-fg-dim)]">
             <GitPullRequest className="w-3.5 h-3.5" />

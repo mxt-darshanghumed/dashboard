@@ -1,13 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  Sparkles,
-  Loader2,
-  RefreshCw,
-  ChevronDown,
-  AlertCircle,
-} from "lucide-react";
+import { Sparkles, Loader2, RefreshCw, ChevronDown, AlertCircle } from "lucide-react";
 import { fetchTicketProgress, ApiError } from "@/lib/api";
 import { statusHue } from "@/lib/statusColors";
 import type { JiraStatusCategory } from "@/lib/api";
@@ -19,8 +13,6 @@ interface Props {
   statusCategory: JiraStatusCategory;
 }
 
-const TEN_MIN = 10 * 60 * 1000;
-
 export function ProgressSection({ ticketKey, statusName, statusCategory }: Props) {
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState(false);
@@ -28,10 +20,9 @@ export function ProgressSection({ ticketKey, statusName, statusCategory }: Props
   const query = useQuery({
     queryKey: ["progress", ticketKey],
     queryFn: () => fetchTicketProgress(ticketKey),
-    staleTime: TEN_MIN,
+    enabled: false,
+    staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
-    refetchInterval: TEN_MIN,
-    refetchIntervalInBackground: true,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     retry: 1,
@@ -42,15 +33,38 @@ export function ProgressSection({ ticketKey, statusName, statusCategory }: Props
   const errorMessage = apiError?.message ?? (query.error ? String(query.error) : null);
   const hue = statusHue(statusName, statusCategory);
 
-  async function refresh() {
-    await qc.fetchQuery({
-      queryKey: ["progress", ticketKey],
-      queryFn: () => fetchTicketProgress(ticketKey, { refresh: true }),
-      staleTime: 0,
-    });
+  async function analyze(forceRefresh = false) {
+    if (forceRefresh) {
+      await qc.fetchQuery({
+        queryKey: ["progress", ticketKey],
+        queryFn: () => fetchTicketProgress(ticketKey, { refresh: true }),
+        staleTime: 0,
+      });
+    } else {
+      await query.refetch();
+    }
   }
 
-  if (query.isLoading) {
+  // No data yet — show the Analyze button (full width)
+  if (!data && !query.isFetching && !errorMessage) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          analyze();
+        }}
+        className="w-full px-4 py-2.5 text-left flex items-center gap-2 text-[11px] font-medium text-[var(--color-fg-dim)] hover:text-[var(--color-accent)] hover:bg-[color-mix(in_oklch,var(--color-accent)_5%,transparent)] border-t border-[var(--color-border-subtle)] transition-colors"
+      >
+        <Sparkles className="w-3.5 h-3.5" />
+        Check progress with Claude
+      </button>
+    );
+  }
+
+  // Loading, first run
+  if (query.isFetching && !data) {
     return (
       <div className="px-4 py-2.5 flex items-center gap-2 text-[11px] text-[var(--color-fg-muted)] border-t border-[var(--color-border-subtle)]">
         <Sparkles className="w-3.5 h-3.5 text-[var(--color-accent)]" />
@@ -60,6 +74,7 @@ export function ProgressSection({ ticketKey, statusName, statusCategory }: Props
     );
   }
 
+  // Error state
   if (errorMessage && !data) {
     return (
       <div className="px-4 py-2.5 flex items-start gap-2 text-[11px] border-t border-[var(--color-border-subtle)]">
@@ -71,7 +86,7 @@ export function ProgressSection({ ticketKey, statusName, statusCategory }: Props
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              refresh();
+              analyze();
             }}
             className="mt-1 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] underline"
           >
@@ -86,29 +101,47 @@ export function ProgressSection({ ticketKey, statusName, statusCategory }: Props
 
   return (
     <div className="border-t border-[var(--color-border-subtle)]">
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
           setExpanded((v) => !v);
         }}
-        className="w-full px-4 pt-2.5 pb-2 text-left hover:bg-[color-mix(in_oklch,var(--color-fg)_4%,transparent)] transition-colors"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }
+        }}
+        className="w-full px-4 pt-2.5 pb-2 text-left hover:bg-[color-mix(in_oklch,var(--color-fg)_4%,transparent)] transition-colors cursor-pointer"
       >
         <div className="flex items-center gap-2 mb-1.5">
           <Sparkles className="w-3 h-3" style={{ color: `oklch(0.86 0.15 ${hue})` }} />
           <span className="text-[10px] uppercase tracking-[0.14em] font-semibold text-[var(--color-fg-muted)]">
             Progress
           </span>
-          {query.isFetching && !query.isLoading && (
-            <Loader2 className="w-2.5 h-2.5 animate-spin text-[var(--color-fg-dim)]" />
-          )}
           <span
             className="text-[11px] font-mono font-semibold ml-auto"
             style={{ color: `oklch(0.92 0.14 ${hue})` }}
           >
             {data.percent}%
           </span>
+          <button
+            type="button"
+            title="Re-analyze"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              analyze(true);
+            }}
+            disabled={query.isFetching}
+            className="ml-1 inline-flex items-center justify-center w-5 h-5 rounded text-[var(--color-fg-dim)] hover:text-[var(--color-accent)] hover:bg-[color-mix(in_oklch,var(--color-accent)_10%,transparent)] transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={cn("w-3 h-3", query.isFetching && "animate-spin")} />
+          </button>
           <ChevronDown
             className={cn(
               "w-3 h-3 text-[var(--color-fg-dim)] transition-transform duration-200",
@@ -129,7 +162,7 @@ export function ProgressSection({ ticketKey, statusName, statusCategory }: Props
             }}
           />
         </div>
-      </button>
+      </div>
 
       <AnimatePresence initial={false}>
         {expanded && (
@@ -167,22 +200,6 @@ export function ProgressSection({ ticketKey, statusName, statusCategory }: Props
               )}
               <div className="flex items-center gap-2 text-[10px] text-[var(--color-fg-dim)] font-mono">
                 <span>analyzed {timeAgo(data.analyzedAt)}</span>
-                <span>·</span>
-                <span>auto-refreshes every 10 min</span>
-                <span>·</span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    refresh();
-                  }}
-                  disabled={query.isFetching}
-                  className="inline-flex items-center gap-1 hover:text-[var(--color-fg-muted)] transition-colors disabled:opacity-50"
-                >
-                  <RefreshCw className={cn("w-2.5 h-2.5", query.isFetching && "animate-spin")} />
-                  Re-analyze
-                </button>
               </div>
             </div>
           </motion.div>
