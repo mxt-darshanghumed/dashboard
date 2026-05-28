@@ -117,6 +117,9 @@ const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
 wss.on("connection", (ws) => {
+  let sessionId: string | undefined;
+  let busy = false;
+
   ws.on("message", async (raw) => {
     let msg: { type: string; agentId?: string; prompt?: string };
     try {
@@ -126,8 +129,19 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (msg.type === "reset") {
+      sessionId = undefined;
+      ws.send(JSON.stringify({ type: "reset_ack" }));
+      return;
+    }
+
     if (msg.type !== "run" || !msg.agentId) {
-      ws.send(JSON.stringify({ type: "error", error: "expected { type: 'run', agentId, prompt? }" }));
+      ws.send(JSON.stringify({ type: "error", error: "expected { type: 'run', agentId, prompt }" }));
+      return;
+    }
+
+    if (busy) {
+      ws.send(JSON.stringify({ type: "error", error: "agent is still responding to the previous message" }));
       return;
     }
 
@@ -137,19 +151,24 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    busy = true;
     try {
-      await runAgent({
+      const finalSessionId = await runAgent({
         agent,
         userPrompt: msg.prompt ?? "",
+        resumeSessionId: sessionId,
         onEvent: (evt) => {
           if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(evt));
         },
       });
+      if (finalSessionId) sessionId = finalSessionId;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (ws.readyState === ws.OPEN) {
         ws.send(JSON.stringify({ type: "error", error: message }));
       }
+    } finally {
+      busy = false;
     }
   });
 });

@@ -19,12 +19,13 @@ export async function fetchAgent(id: string): Promise<AgentConfig> {
 }
 
 export type RunEvent =
-  | { type: "started"; agentId: string }
+  | { type: "started"; agentId: string; sessionId?: string }
   | { type: "text"; text: string }
   | { type: "tool_use"; name: string; input: unknown }
   | { type: "tool_result"; output: unknown }
-  | { type: "done"; result?: string }
-  | { type: "error"; error: string };
+  | { type: "done"; result?: string; sessionId?: string }
+  | { type: "error"; error: string }
+  | { type: "reset_ack" };
 
 export type CiStatus = "success" | "failure" | "pending" | "none";
 export type ReviewStatus = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | "NONE";
