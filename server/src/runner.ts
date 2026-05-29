@@ -23,14 +23,9 @@ interface RunArgs {
   canUseTool?: (toolName: string, input: Record<string, unknown>) => Promise<PermissionDecision>;
 }
 
-const ALWAYS_SAFE = new Set([
-  "Read",
-  "Glob",
-  "Grep",
-  "WebSearch",
-  "WebFetch",
-  "AskUserQuestion",
-]);
+// Only ask the user for tools that change code on disk.
+// Everything else (reads, searches, bash, MCP calls, agent spawning) auto-allows.
+const REQUIRES_PERMISSION = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 export async function runAgent({
   engine,
@@ -45,7 +40,7 @@ export async function runAgent({
 
   const wrappedCanUseTool = canUseTool
     ? async (toolName: string, input: Record<string, unknown>) => {
-        if (ALWAYS_SAFE.has(toolName)) {
+        if (!REQUIRES_PERMISSION.has(toolName)) {
           return { behavior: "allow" as const, updatedInput: input };
         }
         const result = await canUseTool(toolName, input);

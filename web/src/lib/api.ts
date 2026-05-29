@@ -14,6 +14,23 @@ export interface SessionSummary {
   busy: boolean;
   firstUserMessage?: string;
   connected: boolean;
+  messageCount: number;
+}
+
+export type StoredAssistantBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_use"; name: string; input: unknown; id?: string }
+  | { type: "tool_result"; output: unknown }
+  | { type: "permission_request"; id: string; toolName: string; input: unknown; status: "allowed" | "denied" }
+  | { type: "error"; text: string };
+
+export interface StoredMessage {
+  id: string;
+  ts: string;
+  role: "user" | "assistant";
+  text?: string;
+  replyTo?: { id: string; preview: string };
+  blocks?: StoredAssistantBlock[];
 }
 
 export async function fetchEngines(): Promise<Engine[]> {
@@ -52,13 +69,34 @@ export async function deleteSession(id: string): Promise<void> {
   if (!r.ok) throw new Error(`deleteSession: ${r.status}`);
 }
 
+export async function renameSession(id: string, title: string): Promise<SessionSummary> {
+  const r = await fetch(`/api/sessions/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  if (!r.ok) throw new Error(`renameSession: ${r.status}`);
+  const body = (await r.json()) as { session: SessionSummary };
+  return body.session;
+}
+
+export async function fetchSessionMessages(id: string): Promise<StoredMessage[]> {
+  const r = await fetch(`/api/sessions/${id}/messages`);
+  if (!r.ok) throw new Error(`fetchSessionMessages: ${r.status}`);
+  const body = (await r.json()) as { messages: StoredMessage[] };
+  return body.messages;
+}
+
 export type RunEvent =
   | { type: "session_open"; sessionId: string }
+  | { type: "history"; messages: StoredMessage[] }
   | { type: "started"; engineId: string; sessionId?: string }
   | { type: "text"; text: string }
   | { type: "tool_use"; name: string; input: unknown; id?: string }
   | { type: "tool_result"; output: unknown }
   | { type: "permission_request"; id: string; toolName: string; input: unknown }
+  | { type: "user_recorded"; message: StoredMessage }
+  | { type: "assistant_recorded"; message: StoredMessage }
   | { type: "done"; result?: string; sessionId?: string }
   | { type: "error"; error: string }
   | { type: "reset_ack" };

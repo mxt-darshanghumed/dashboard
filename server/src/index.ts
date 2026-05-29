@@ -21,6 +21,13 @@ import {
   getSessionSummary,
   deleteSession,
   touchSession,
+  renameSession,
+  appendUserMessage,
+  appendAssistantMessage,
+  clearSessionMessages,
+  initSessionStore,
+  type AssistantBlock,
+  type Message,
 } from "./sessions.js";
 import { listMyOpenPRs, searchPRsForTicketKey } from "./github.js";
 import type { PullRequestItem } from "./github.js";
@@ -66,6 +73,20 @@ app.get("/api/sessions/:id", (req, res) => {
   const s = getSessionSummary(req.params.id);
   if (!s) return res.status(404).json({ error: "session not found" });
   res.json({ session: s });
+});
+
+app.patch("/api/sessions/:id", (req, res) => {
+  const title = typeof req.body?.title === "string" ? req.body.title : undefined;
+  if (!title) return res.status(400).json({ error: "title required" });
+  const updated = renameSession(req.params.id, title);
+  if (!updated) return res.status(404).json({ error: "session not found" });
+  res.json({ session: updated });
+});
+
+app.get("/api/sessions/:id/messages", (req, res) => {
+  const s = getSession(req.params.id);
+  if (!s) return res.status(404).json({ error: "session not found" });
+  res.json({ messages: s.messages });
 });
 
 app.delete("/api/sessions/:id", (req, res) => {
@@ -182,20 +203,33 @@ wss.on("connection", (ws, sessionId: string) => {
   }
 
   session.ws = ws;
-  const pendingPermissions = new Map<string, (decision: PermissionDecision) => void>();
+  const pendingPermissions = new Map<
+    string,
+    { resolve: (d: PermissionDecision) => void; toolName: string; input: unknown }
+  >();
+  // Buffer of in-flight assistant blocks (so we can persist a complete turn on "done")
+  let currentAssistantBlocks: AssistantBlock[] = [];
 
   ws.send(JSON.stringify({ type: "session_open", sessionId }));
+  ws.send(JSON.stringify({ type: "history", messages: session.messages }));
 
   ws.on("close", () => {
     if (session.ws === ws) session.ws = undefined;
-    pendingPermissions.forEach((resolve) =>
+    pendingPermissions.forEach(({ resolve }) =>
       resolve({ behavior: "deny", message: "client disconnected" })
     );
     pendingPermissions.clear();
   });
 
   ws.on("message", async (raw) => {
-    let msg: { type: string; prompt?: string; id?: string; behavior?: "allow" | "deny"; reason?: string };
+    let msg: {
+      type: string;
+      prompt?: string;
+      id?: string;
+      behavior?: "allow" | "deny";
+      reason?: string;
+      replyTo?: { id?: unknown; preview?: unknown };
+    };
     try {
       msg = JSON.parse(raw.toString());
     } catch {
@@ -204,19 +238,27 @@ wss.on("connection", (ws, sessionId: string) => {
     }
 
     if (msg.type === "reset") {
-      session.agentSessionId = undefined;
+      clearSessionMessages(session.id);
       ws.send(JSON.stringify({ type: "reset_ack" }));
       return;
     }
 
     if (msg.type === "permission_response" && msg.id) {
-      const resolve = pendingPermissions.get(msg.id);
-      if (resolve) {
+      const entry = pendingPermissions.get(msg.id);
+      if (entry) {
         pendingPermissions.delete(msg.id);
+        // Persist the outcome into the current assistant block list
+        currentAssistantBlocks.push({
+          type: "permission_request",
+          id: msg.id,
+          toolName: entry.toolName,
+          input: entry.input,
+          status: msg.behavior === "allow" ? "allowed" : "denied",
+        });
         if (msg.behavior === "allow") {
-          resolve({ behavior: "allow" });
+          entry.resolve({ behavior: "allow" });
         } else {
-          resolve({ behavior: "deny", message: msg.reason ?? "denied by user" });
+          entry.resolve({ behavior: "deny", message: msg.reason ?? "denied by user" });
         }
       }
       return;
@@ -232,24 +274,53 @@ wss.on("connection", (ws, sessionId: string) => {
     }
 
     session.busy = true;
-    touchSession(session.id);
-    if (!session.firstUserMessage && msg.prompt) {
-      session.firstUserMessage = msg.prompt.slice(0, 200);
-      if (session.title === "New chat") session.title = msg.prompt.slice(0, 60);
+    const userText = msg.prompt ?? "";
+    const replyTo =
+      msg.replyTo && typeof msg.replyTo.id === "string" && typeof msg.replyTo.preview === "string"
+        ? { id: msg.replyTo.id, preview: msg.replyTo.preview }
+        : undefined;
+    const userMessage = appendUserMessage(session.id, userText, replyTo);
+    if (userMessage && ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ type: "user_recorded", message: userMessage }));
     }
+
+    currentAssistantBlocks = [];
+
+    // Build a prompt that includes any quoted message inline so the agent has the context
+    const composedPrompt = replyTo
+      ? `[Replying to an earlier message: "${replyTo.preview.slice(0, 300)}"]\n\n${userText}`
+      : userText;
 
     try {
       const finalSessionId = await runAgent({
         engine,
-        userPrompt: msg.prompt ?? "",
+        userPrompt: composedPrompt,
         resumeSessionId: session.agentSessionId,
         onEvent: (evt) => {
+          // Accumulate blocks for persistence; permission outcomes are recorded
+          // in the message handler when the client responds.
+          if (evt.type === "text") {
+            const last = currentAssistantBlocks[currentAssistantBlocks.length - 1];
+            if (last?.type === "text") last.text += evt.text;
+            else currentAssistantBlocks.push({ type: "text", text: evt.text });
+          } else if (evt.type === "tool_use") {
+            currentAssistantBlocks.push({
+              type: "tool_use",
+              name: evt.name,
+              input: evt.input,
+              id: evt.id,
+            });
+          } else if (evt.type === "tool_result") {
+            currentAssistantBlocks.push({ type: "tool_result", output: evt.output });
+          } else if (evt.type === "error") {
+            currentAssistantBlocks.push({ type: "error", text: evt.error });
+          }
           if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(evt));
         },
         canUseTool: async (toolName: string, input: Record<string, unknown>) => {
           const reqId = Math.random().toString(36).slice(2);
           return new Promise<PermissionDecision>((resolve) => {
-            pendingPermissions.set(reqId, resolve);
+            pendingPermissions.set(reqId, { resolve, toolName, input });
             if (ws.readyState === ws.OPEN) {
               ws.send(
                 JSON.stringify({ type: "permission_request", id: reqId, toolName, input })
@@ -264,16 +335,29 @@ wss.on("connection", (ws, sessionId: string) => {
       if (finalSessionId) session.agentSessionId = finalSessionId;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      currentAssistantBlocks.push({ type: "error", text: message });
       if (ws.readyState === ws.OPEN) {
         ws.send(JSON.stringify({ type: "error", error: message }));
       }
     } finally {
+      // Persist whatever the assistant produced as a complete turn
+      if (currentAssistantBlocks.length > 0) {
+        const m = appendAssistantMessage(session.id, currentAssistantBlocks);
+        if (m && ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ type: "assistant_recorded", message: m }));
+        }
+      }
+      currentAssistantBlocks = [];
       session.busy = false;
       touchSession(session.id);
     }
   });
 });
 
-httpServer.listen(PORT, () => {
-  console.log(`[server] listening on http://localhost:${PORT}`);
-});
+initSessionStore()
+  .catch((err) => console.log(`[sessions] init failed: ${err}`))
+  .finally(() => {
+    httpServer.listen(PORT, () => {
+      console.log(`[server] listening on http://localhost:${PORT}`);
+    });
+  });
