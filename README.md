@@ -47,6 +47,56 @@ JIRA_AUTH_TYPE=basic
 
 > The `.env` file is git-ignored, so your token will not be committed.
 
+### 3. (Optional) Install Ollama for offline prompt compression
+
+The chat input has two compression buttons — **Rules** (always available, instant, pure regex) and **Smart** (needs Ollama running locally). Smart compression sends your prompt to a small local LLM that rewrites it using the fewest possible tokens. Zero remote tokens spent.
+
+#### Install Ollama (Windows)
+
+```powershell
+winget install Ollama.Ollama
+```
+
+The installer registers Ollama as a Windows service, so it starts automatically on the next boot and listens on `http://localhost:11434`. You don't need to launch anything manually.
+
+After installation, **open a new PowerShell window** (so `ollama` is on PATH) and pull a small model:
+
+```powershell
+ollama pull qwen2.5:1.5b
+```
+
+That's ~1 GB on disk, fast on CPU (no GPU needed).
+
+#### Other model options
+
+Any chat-tuned model works. Choose based on quality vs. speed:
+
+| Model | Size | Notes |
+|---|---|---|
+| `qwen2.5:1.5b` | ~1 GB | Default. Fast, good baseline. |
+| `qwen2.5:3b` | ~2 GB | Better quality, still fast. |
+| `phi3:mini` | ~2.3 GB | Strong reasoning. |
+| `gemma2:2b` | ~1.6 GB | Balanced. |
+
+To use a different model, add to `.env`:
+
+```env
+OLLAMA_URL=http://localhost:11434
+OLLAMA_COMPRESS_MODEL=qwen2.5:3b
+```
+
+#### Verify it's working
+
+1. Open http://localhost:11434 in your browser. You should see `Ollama is running`.
+2. Refresh the chat tab in the app. The **Smart** button under the input is enabled (not greyed out).
+3. Type a verbose prompt, click **Smart**, and watch your token count drop.
+
+If the **Smart** button stays disabled, the backend can't reach `localhost:11434`. Common causes:
+
+- Ollama service isn't running — check the **Ollama** entry in the Windows system tray, or run `ollama serve` manually.
+- A firewall is blocking the local port.
+- The `OLLAMA_URL` in `.env` doesn't match the actual port.
+
 ## Layout
 
 ```
