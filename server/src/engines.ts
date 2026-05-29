@@ -36,6 +36,16 @@ export const engines: Engine[] = [
       "You have access to their full Claude Code environment — every MCP server, skill, file in their workspace. " +
       "Be concise and act decisively. If they ask a question, answer it directly. " +
       "If they ask you to do something, do it (using tools when needed) and report what you did.\n\n" +
+      "SERVICES & REPOS — DEFAULT TO GITHUB\n" +
+      "The user works at Maxxton. When they mention a service, repo, or ticket key (e.g. third-party-v2-service, MXTS-12345, a PR number), " +
+      "**use the `gh` CLI to inspect it on GitHub** rather than searching the local filesystem or asking which local clone to look at. Examples:\n" +
+      "  - `gh repo view MaxxtonGroup/<repo>`\n" +
+      "  - `gh api repos/MaxxtonGroup/<repo>/contents/<path>`\n" +
+      "  - `gh search code '<query>' --owner MaxxtonGroup`\n" +
+      "  - `gh pr view <number> --repo MaxxtonGroup/<repo>`\n" +
+      "  - `gh search prs --owner MaxxtonGroup 'MXTS-12345'`\n" +
+      "If `gh` reports the repo is in a different org, try `mxts-cloud`, `Maxxton`, or `MaxxtonGroup-`. Only fall back to the local filesystem if (a) the user explicitly asks for a local file, " +
+      "or (b) the task clearly needs unpushed work. Do not request paths the user hasn't mentioned.\n\n" +
       "PAST CONVERSATIONS\n" +
       `Your past chat sessions with this user are stored as JSON files in: ${sessionsDir}\n` +
       "Each file represents one session and contains: id, title, engineId, createdAt, lastActivityAt, and messages[] (each message has role, ts, and either text or blocks).\n" +
@@ -61,7 +71,15 @@ App root: ${cockpitRoot}
 
 The dev environment hot-reloads: save a .tsx and Vite refreshes the UI; save a .ts in server/ and tsx watch restarts the server.
 
-Prefer Edit over Write. After substantive changes, typecheck (cd server && npx tsc --noEmit, or cd web && npx tsc -b --force). Don't touch .env. Don't commit/push without being asked.`,
+Prefer Edit over Write. After substantive changes, typecheck (cd server && npx tsc --noEmit, or cd web && npx tsc -b --force). Don't touch .env. Don't commit/push without being asked.
+
+SERVICES & REPOS — DEFAULT TO GITHUB
+The user works at Maxxton. When they mention any OTHER service or repo (anything not under ${cockpitRoot}) — e.g. third-party-v2-service, MXTS-12345, a PR number, "the units API" — **use the gh CLI** to inspect it on GitHub. Don't ask which local clone to look at and don't search the filesystem outside this app:
+  - gh repo view MaxxtonGroup/<repo>
+  - gh api repos/MaxxtonGroup/<repo>/contents/<path>
+  - gh search code '<query>' --owner MaxxtonGroup
+  - gh pr view <number> --repo MaxxtonGroup/<repo>
+The agent-cockpit codebase itself stays local — Read/Edit/Write into ${cockpitRoot} as needed.`,
     permissionMode: "default",
     cwd: cockpitRoot,
   },
