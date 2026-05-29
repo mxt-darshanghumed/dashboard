@@ -213,6 +213,14 @@ httpServer.on("upgrade", (req, socket, head) => {
   }
 });
 
+function sendToSession(session: ReturnType<typeof getSession>, payload: unknown) {
+  if (!session) return;
+  const ws = session.ws;
+  if (ws && ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify(payload));
+  }
+}
+
 wss.on("connection", (ws, sessionId: string) => {
   const session = getSession(sessionId);
   if (!session) {
@@ -227,23 +235,40 @@ wss.on("connection", (ws, sessionId: string) => {
     return;
   }
 
+  // If there was a stale ws attached, drop it so events route here from now on.
+  if (session.ws && session.ws !== ws && session.ws.readyState === session.ws.OPEN) {
+    try { session.ws.close(1000, "replaced by new connection"); } catch { /* ignore */ }
+  }
   session.ws = ws;
-  const pendingPermissions = new Map<
-    string,
-    { resolve: (d: PermissionDecision) => void; toolName: string; input: unknown }
-  >();
-  // Buffer of in-flight assistant blocks (so we can persist a complete turn on "done")
-  let currentAssistantBlocks: AssistantBlock[] = [];
 
   ws.send(JSON.stringify({ type: "session_open", sessionId }));
   ws.send(JSON.stringify({ type: "history", messages: session.messages }));
 
+  // If the agent is mid-response, replay current partial state + any pending
+  // permission requests so the user picks up exactly where they left off.
+  if (session.busy && session.currentAssistantBlocks) {
+    ws.send(
+      JSON.stringify({
+        type: "in_progress",
+        blocks: session.currentAssistantBlocks,
+      })
+    );
+  }
+  for (const p of session.pendingPermissions.values()) {
+    ws.send(
+      JSON.stringify({
+        type: "permission_request",
+        id: p.id,
+        toolName: p.toolName,
+        input: p.input,
+      })
+    );
+  }
+
   ws.on("close", () => {
     if (session.ws === ws) session.ws = undefined;
-    pendingPermissions.forEach(({ resolve }) =>
-      resolve({ behavior: "deny", message: "client disconnected" })
-    );
-    pendingPermissions.clear();
+    // Important: do NOT deny pending permissions here. The agent keeps running
+    // in the background; if the user returns, we re-emit pending requests.
   });
 
   ws.on("message", async (raw) => {
@@ -263,23 +288,31 @@ wss.on("connection", (ws, sessionId: string) => {
     }
 
     if (msg.type === "reset") {
+      // Deny any in-flight permissions so the running agent (if any) wraps up.
+      session.pendingPermissions.forEach((p) =>
+        p.resolve({ behavior: "deny", message: "session reset" })
+      );
+      session.pendingPermissions.clear();
+      session.currentAssistantBlocks = undefined;
       clearSessionMessages(session.id);
       ws.send(JSON.stringify({ type: "reset_ack" }));
       return;
     }
 
     if (msg.type === "permission_response" && msg.id) {
-      const entry = pendingPermissions.get(msg.id);
+      const entry = session.pendingPermissions.get(msg.id);
       if (entry) {
-        pendingPermissions.delete(msg.id);
+        session.pendingPermissions.delete(msg.id);
         // Persist the outcome into the current assistant block list
-        currentAssistantBlocks.push({
-          type: "permission_request",
-          id: msg.id,
-          toolName: entry.toolName,
-          input: entry.input,
-          status: msg.behavior === "allow" ? "allowed" : "denied",
-        });
+        if (session.currentAssistantBlocks) {
+          session.currentAssistantBlocks.push({
+            type: "permission_request",
+            id: msg.id,
+            toolName: entry.toolName,
+            input: entry.input,
+            status: msg.behavior === "allow" ? "allowed" : "denied",
+          });
+        }
         if (msg.behavior === "allow") {
           entry.resolve({ behavior: "allow" });
         } else {
@@ -305,11 +338,11 @@ wss.on("connection", (ws, sessionId: string) => {
         ? { id: msg.replyTo.id, preview: msg.replyTo.preview }
         : undefined;
     const userMessage = appendUserMessage(session.id, userText, replyTo);
-    if (userMessage && ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify({ type: "user_recorded", message: userMessage }));
+    if (userMessage) {
+      sendToSession(session, { type: "user_recorded", message: userMessage });
     }
 
-    currentAssistantBlocks = [];
+    session.currentAssistantBlocks = [];
 
     // Build a prompt that includes any quoted message inline so the agent has the context
     const composedPrompt = replyTo
@@ -322,57 +355,62 @@ wss.on("connection", (ws, sessionId: string) => {
         userPrompt: composedPrompt,
         resumeSessionId: session.agentSessionId,
         onEvent: (evt) => {
-          // Accumulate blocks for persistence; permission outcomes are recorded
-          // in the message handler when the client responds.
+          // Accumulate blocks for persistence; survives WS disconnects.
+          const blocks = session.currentAssistantBlocks ?? [];
           if (evt.type === "text") {
-            const last = currentAssistantBlocks[currentAssistantBlocks.length - 1];
+            const last = blocks[blocks.length - 1];
             if (last?.type === "text") last.text += evt.text;
-            else currentAssistantBlocks.push({ type: "text", text: evt.text });
+            else blocks.push({ type: "text", text: evt.text });
           } else if (evt.type === "tool_use") {
-            currentAssistantBlocks.push({
+            blocks.push({
               type: "tool_use",
               name: evt.name,
               input: evt.input,
               id: evt.id,
             });
           } else if (evt.type === "tool_result") {
-            currentAssistantBlocks.push({ type: "tool_result", output: evt.output });
+            blocks.push({ type: "tool_result", output: evt.output });
           } else if (evt.type === "error") {
-            currentAssistantBlocks.push({ type: "error", text: evt.error });
+            blocks.push({ type: "error", text: evt.error });
           }
-          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(evt));
+          session.currentAssistantBlocks = blocks;
+          // Route to the session's *current* ws (may differ from the one that started this run).
+          sendToSession(session, evt);
         },
         canUseTool: async (toolName: string, input: Record<string, unknown>) => {
           const reqId = Math.random().toString(36).slice(2);
           return new Promise<PermissionDecision>((resolve) => {
-            pendingPermissions.set(reqId, { resolve, toolName, input });
-            if (ws.readyState === ws.OPEN) {
-              ws.send(
-                JSON.stringify({ type: "permission_request", id: reqId, toolName, input })
-              );
-            } else {
-              pendingPermissions.delete(reqId);
-              resolve({ behavior: "deny", message: "client not connected" });
-            }
+            session.pendingPermissions.set(reqId, {
+              id: reqId,
+              resolve,
+              toolName,
+              input,
+              createdAt: Date.now(),
+            });
+            sendToSession(session, {
+              type: "permission_request",
+              id: reqId,
+              toolName,
+              input,
+            });
+            // Even if no ws is connected right now, we keep the entry; a new
+            // connection will re-emit it.
           });
         },
       });
       if (finalSessionId) session.agentSessionId = finalSessionId;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      currentAssistantBlocks.push({ type: "error", text: message });
-      if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: "error", error: message }));
-      }
+      if (!session.currentAssistantBlocks) session.currentAssistantBlocks = [];
+      session.currentAssistantBlocks.push({ type: "error", text: message });
+      sendToSession(session, { type: "error", error: message });
     } finally {
-      // Persist whatever the assistant produced as a complete turn
-      if (currentAssistantBlocks.length > 0) {
-        const m = appendAssistantMessage(session.id, currentAssistantBlocks);
-        if (m && ws.readyState === ws.OPEN) {
-          ws.send(JSON.stringify({ type: "assistant_recorded", message: m }));
-        }
+      const blocks = session.currentAssistantBlocks ?? [];
+      if (blocks.length > 0) {
+        const m = appendAssistantMessage(session.id, blocks);
+        if (m) sendToSession(session, { type: "assistant_recorded", message: m });
       }
-      currentAssistantBlocks = [];
+      session.currentAssistantBlocks = undefined;
       session.busy = false;
       touchSession(session.id);
     }

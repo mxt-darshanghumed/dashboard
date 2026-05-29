@@ -11,11 +11,23 @@ import {
 export type AssistantBlock = StoredAssistantBlock;
 export type Message = StoredMessage;
 
+export interface PendingPermission {
+  id: string;
+  toolName: string;
+  input: unknown;
+  resolve: (decision: { behavior: "allow"; updatedInput?: Record<string, unknown> } | { behavior: "deny"; message: string }) => void;
+  createdAt: number;
+}
+
 export interface Session extends StoredSession {
   ws?: WebSocket;
   busy: boolean;
   /** Debounce timer for persistence. */
   saveTimer?: NodeJS.Timeout;
+  /** Assistant blocks accumulated during the current run (cleared on run end). */
+  currentAssistantBlocks?: AssistantBlock[];
+  /** Permission requests awaiting a client decision. Survive WS disconnects. */
+  pendingPermissions: Map<string, PendingPermission>;
 }
 
 export interface SessionSummary {
@@ -39,7 +51,11 @@ function randomId(): string {
 export async function initSessionStore(): Promise<void> {
   const loaded = await loadAllSessions();
   for (const stored of loaded) {
-    sessions.set(stored.id, { ...stored, busy: false });
+    sessions.set(stored.id, {
+      ...stored,
+      busy: false,
+      pendingPermissions: new Map(),
+    });
   }
   console.log(`[sessions] loaded ${loaded.length} from disk`);
 }
@@ -47,7 +63,14 @@ export async function initSessionStore(): Promise<void> {
 function scheduleSave(s: Session, delayMs = 250): void {
   if (s.saveTimer) clearTimeout(s.saveTimer);
   s.saveTimer = setTimeout(() => {
-    const { ws: _ws, busy: _busy, saveTimer: _t, ...stored } = s;
+    const {
+      ws: _ws,
+      busy: _busy,
+      saveTimer: _t,
+      currentAssistantBlocks: _b,
+      pendingPermissions: _p,
+      ...stored
+    } = s;
     void persistSession(stored as StoredSession).catch((err) => {
       console.log(`[sessions] persist ${s.id} failed: ${err}`);
     });
@@ -65,6 +88,7 @@ export function createSession(engineId: string, title?: string): Session {
     lastActivityAt: now,
     busy: false,
     messages: [],
+    pendingPermissions: new Map(),
   };
   sessions.set(id, session);
   scheduleSave(session, 0);

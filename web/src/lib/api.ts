@@ -135,6 +135,7 @@ export async function fetchCompressStatus(): Promise<CompressStatus> {
 export type RunEvent =
   | { type: "session_open"; sessionId: string }
   | { type: "history"; messages: StoredMessage[] }
+  | { type: "in_progress"; blocks: StoredAssistantBlock[] }
   | { type: "started"; engineId: string; sessionId?: string }
   | { type: "text"; text: string }
   | { type: "tool_use"; name: string; input: unknown; id?: string }

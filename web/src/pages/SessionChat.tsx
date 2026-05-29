@@ -175,6 +175,23 @@ export function SessionChat() {
       return;
     }
 
+    if (evt.type === "in_progress") {
+      // Reconnecting to a mid-run session: append the partial assistant turn so
+      // subsequent streaming events flow in naturally.
+      setTurns((prev) => [
+        ...prev,
+        {
+          id: nanoid(),
+          role: "assistant",
+          blocks: evt.blocks as AssistantBlock[],
+          streaming: true,
+          ts: new Date().toISOString(),
+        },
+      ]);
+      setStreaming(true);
+      return;
+    }
+
     if (evt.type === "user_recorded") return; // already added optimistically
     if (evt.type === "assistant_recorded") {
       setTurns((prev) => {

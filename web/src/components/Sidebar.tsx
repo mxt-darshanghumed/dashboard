@@ -33,12 +33,7 @@ export function Sidebar() {
           <div className="w-8 h-8 rounded-[var(--radius-md)] bg-gradient-to-br from-[var(--color-accent)] to-[oklch(0.6_0.2_310)] flex items-center justify-center ring-accent-soft">
             <Sparkles className="w-4 h-4 text-[var(--color-accent-fg)]" />
           </div>
-          <div>
-            <div className="text-sm font-semibold tracking-tight">Cockpit</div>
-            <div className="text-[11px] uppercase tracking-[0.12em] text-[var(--color-fg-dim)]">
-              agent OS
-            </div>
-          </div>
+          <div className="text-sm font-semibold tracking-tight">Cockpit</div>
         </div>
       </div>
 
