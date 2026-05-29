@@ -1,8 +1,9 @@
 import { Routes, Route } from "react-router-dom";
-import { ClipboardCheck, Settings as SettingsIcon, Plus } from "lucide-react";
+import { ClipboardCheck, Settings as SettingsIcon } from "lucide-react";
 import { Sidebar } from "@/components/Sidebar";
 import { Dashboard } from "@/pages/Dashboard";
-import { AgentDetail } from "@/pages/AgentDetail";
+import { EngineDetail } from "@/pages/EngineDetail";
+import { SessionChat } from "@/pages/SessionChat";
 import { PRsTab } from "@/pages/PRsTab";
 import { JiraTab } from "@/pages/JiraTab";
 import { JiraDetail } from "@/pages/JiraDetail";
@@ -15,7 +16,8 @@ export default function App() {
       <main className="flex-1 overflow-y-auto">
         <Routes>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/agent/:id" element={<AgentDetail />} />
+          <Route path="/engine/:engineId" element={<EngineDetail />} />
+          <Route path="/engine/:engineId/session/:sessionId" element={<SessionChat />} />
           <Route path="/prs" element={<PRsTab />} />
           <Route path="/jira" element={<JiraTab />} />
           <Route path="/jira/:key" element={<JiraDetail />} />
@@ -31,23 +33,6 @@ export default function App() {
                   "Skip-on-leave detection via Slack status",
                   "One-click submit (all tickets in active sprint, assigned to you)",
                   "Schedule: auto-run at 5pm IST on weekdays",
-                ]}
-              />
-            }
-          />
-          <Route
-            path="/new-agent"
-            element={
-              <Placeholder
-                icon={Plus}
-                title="New agent"
-                description="Create a new Claude agent: name, description, system prompt, allowed tools, and (optionally) an MCP set."
-                upcoming={[
-                  "Form: name + icon + system prompt",
-                  "Picker for which MCP servers the agent can use",
-                  "Allowed tools selection (Read, Bash, WebSearch, ...)",
-                  "Optional cron schedule",
-                  "Save to SQLite via Node's built-in node:sqlite",
                 ]}
               />
             }

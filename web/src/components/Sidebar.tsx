@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -6,9 +7,11 @@ import {
   ClipboardCheck,
   Sparkles,
   Settings,
-  Plus,
+  Bot,
+  ZapOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { fetchEngines, type Engine } from "@/lib/api";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -18,6 +21,11 @@ const navItems = [
 ];
 
 export function Sidebar() {
+  const [engines, setEngines] = useState<Engine[]>([]);
+  useEffect(() => {
+    fetchEngines().then(setEngines).catch(() => setEngines([]));
+  }, []);
+
   return (
     <aside className="w-64 shrink-0 h-screen border-r border-[var(--color-border-subtle)] bg-[var(--color-bg)] flex flex-col">
       <div className="px-5 py-5 border-b border-[var(--color-border-subtle)]">
@@ -34,7 +42,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      <nav className="flex-1 px-3 py-4 space-y-0.5">
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         <div className="px-2 mb-2 text-[11px] uppercase tracking-[0.14em] text-[var(--color-fg-dim)] font-medium">
           Workspace
         </div>
@@ -57,23 +65,44 @@ export function Sidebar() {
           </NavLink>
         ))}
 
-        <div className="px-2 mt-6 mb-2 text-[11px] uppercase tracking-[0.14em] text-[var(--color-fg-dim)] font-medium">
-          Create
-        </div>
-        <NavLink
-          to="/new-agent"
-          className={({ isActive }) =>
-            cn(
-              "flex items-center gap-3 px-3 h-9 rounded-[var(--radius-md)] text-sm transition-colors",
-              isActive
-                ? "bg-[var(--color-bg-elevated)] text-[var(--color-fg)]"
-                : "text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-fg)]"
-            )
-          }
-        >
-          <Plus className="w-4 h-4" />
-          <span>New agent</span>
-        </NavLink>
+        {engines.length > 0 && (
+          <>
+            <div className="px-2 mt-6 mb-2 text-[11px] uppercase tracking-[0.14em] text-[var(--color-fg-dim)] font-medium">
+              Engines
+            </div>
+            {engines.map((engine) =>
+              engine.available ? (
+                <NavLink
+                  key={engine.id}
+                  to={`/engine/${engine.id}`}
+                  className={({ isActive }) =>
+                    cn(
+                      "flex items-center gap-3 px-3 h-9 rounded-[var(--radius-md)] text-sm transition-colors",
+                      isActive
+                        ? "bg-[var(--color-bg-elevated)] text-[var(--color-fg)]"
+                        : "text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-fg)]"
+                    )
+                  }
+                >
+                  <Bot className="w-4 h-4" />
+                  <span>{engine.name}</span>
+                </NavLink>
+              ) : (
+                <div
+                  key={engine.id}
+                  className="flex items-center gap-3 px-3 h-9 rounded-[var(--radius-md)] text-sm text-[var(--color-fg-dim)] opacity-60 cursor-not-allowed"
+                  title="Engine not yet implemented"
+                >
+                  <ZapOff className="w-4 h-4" />
+                  <span>{engine.name}</span>
+                  <span className="ml-auto text-[9px] uppercase tracking-[0.14em] border border-[var(--color-border-subtle)] rounded-full px-1.5 py-0.5">
+                    Soon
+                  </span>
+                </div>
+              )
+            )}
+          </>
+        )}
       </nav>
 
       <div className="px-3 py-4 border-t border-[var(--color-border-subtle)]">

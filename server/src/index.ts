@@ -12,8 +12,16 @@ import express from "express";
 import cors from "cors";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
-import { runAgent } from "./runner.js";
-import { listAgents, getAgent } from "./agents.js";
+import { runAgent, type PermissionDecision } from "./runner.js";
+import { listEngines, getEngine } from "./engines.js";
+import {
+  createSession,
+  listSessionsForEngine,
+  getSession,
+  getSessionSummary,
+  deleteSession,
+  touchSession,
+} from "./sessions.js";
 import { listMyOpenPRs, searchPRsForTicketKey } from "./github.js";
 import type { PullRequestItem } from "./github.js";
 import { listMyActiveJiraIssues, getJiraIssue } from "./jira.js";
@@ -29,14 +37,40 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
-app.get("/api/agents", (_req, res) => {
-  res.json(listAgents());
+app.get("/api/engines", (_req, res) => {
+  res.json({ items: listEngines() });
 });
 
-app.get("/api/agents/:id", (req, res) => {
-  const agent = getAgent(req.params.id);
-  if (!agent) return res.status(404).json({ error: "not found" });
-  res.json(agent);
+app.get("/api/engines/:engineId", (req, res) => {
+  const engine = getEngine(req.params.engineId);
+  if (!engine) return res.status(404).json({ error: "not found" });
+  res.json(engine);
+});
+
+app.get("/api/engines/:engineId/sessions", (req, res) => {
+  const engine = getEngine(req.params.engineId);
+  if (!engine) return res.status(404).json({ error: "engine not found" });
+  res.json({ items: listSessionsForEngine(engine.id) });
+});
+
+app.post("/api/engines/:engineId/sessions", (req, res) => {
+  const engine = getEngine(req.params.engineId);
+  if (!engine) return res.status(404).json({ error: "engine not found" });
+  if (!engine.available) return res.status(400).json({ error: "engine not available" });
+  const title = (req.body && typeof req.body.title === "string" ? req.body.title : undefined) ?? "New chat";
+  const session = createSession(engine.id, title);
+  res.json({ session: getSessionSummary(session.id) });
+});
+
+app.get("/api/sessions/:id", (req, res) => {
+  const s = getSessionSummary(req.params.id);
+  if (!s) return res.status(404).json({ error: "session not found" });
+  res.json({ session: s });
+});
+
+app.delete("/api/sessions/:id", (req, res) => {
+  deleteSession(req.params.id);
+  res.json({ ok: true });
 });
 
 app.get("/api/prs", async (_req, res) => {
@@ -114,14 +148,54 @@ app.get("/api/jira/progress/:key", async (req, res) => {
 
 const httpServer = createServer(app);
 
-const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+const wss = new WebSocketServer({ noServer: true });
 
-wss.on("connection", (ws) => {
-  let sessionId: string | undefined;
-  let busy = false;
+httpServer.on("upgrade", (req, socket, head) => {
+  try {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const match = /^\/ws\/session\/([\w-]+)$/.exec(url.pathname);
+    if (!match) {
+      socket.destroy();
+      return;
+    }
+    const sessionId = match[1];
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, sessionId);
+    });
+  } catch {
+    socket.destroy();
+  }
+});
+
+wss.on("connection", (ws, sessionId: string) => {
+  const session = getSession(sessionId);
+  if (!session) {
+    ws.send(JSON.stringify({ type: "error", error: `session ${sessionId} not found` }));
+    ws.close(1008, "session not found");
+    return;
+  }
+  const engine = getEngine(session.engineId);
+  if (!engine || !engine.available) {
+    ws.send(JSON.stringify({ type: "error", error: "engine unavailable" }));
+    ws.close(1008, "engine unavailable");
+    return;
+  }
+
+  session.ws = ws;
+  const pendingPermissions = new Map<string, (decision: PermissionDecision) => void>();
+
+  ws.send(JSON.stringify({ type: "session_open", sessionId }));
+
+  ws.on("close", () => {
+    if (session.ws === ws) session.ws = undefined;
+    pendingPermissions.forEach((resolve) =>
+      resolve({ behavior: "deny", message: "client disconnected" })
+    );
+    pendingPermissions.clear();
+  });
 
   ws.on("message", async (raw) => {
-    let msg: { type: string; agentId?: string; prompt?: string };
+    let msg: { type: string; prompt?: string; id?: string; behavior?: "allow" | "deny"; reason?: string };
     try {
       msg = JSON.parse(raw.toString());
     } catch {
@@ -130,45 +204,72 @@ wss.on("connection", (ws) => {
     }
 
     if (msg.type === "reset") {
-      sessionId = undefined;
+      session.agentSessionId = undefined;
       ws.send(JSON.stringify({ type: "reset_ack" }));
       return;
     }
 
-    if (msg.type !== "run" || !msg.agentId) {
-      ws.send(JSON.stringify({ type: "error", error: "expected { type: 'run', agentId, prompt }" }));
+    if (msg.type === "permission_response" && msg.id) {
+      const resolve = pendingPermissions.get(msg.id);
+      if (resolve) {
+        pendingPermissions.delete(msg.id);
+        if (msg.behavior === "allow") {
+          resolve({ behavior: "allow" });
+        } else {
+          resolve({ behavior: "deny", message: msg.reason ?? "denied by user" });
+        }
+      }
       return;
     }
 
-    if (busy) {
-      ws.send(JSON.stringify({ type: "error", error: "agent is still responding to the previous message" }));
+    if (msg.type !== "run") {
+      ws.send(JSON.stringify({ type: "error", error: "expected { type: 'run', prompt }" }));
+      return;
+    }
+    if (session.busy) {
+      ws.send(JSON.stringify({ type: "error", error: "session is still responding to the previous message" }));
       return;
     }
 
-    const agent = getAgent(msg.agentId);
-    if (!agent) {
-      ws.send(JSON.stringify({ type: "error", error: `agent ${msg.agentId} not found` }));
-      return;
+    session.busy = true;
+    touchSession(session.id);
+    if (!session.firstUserMessage && msg.prompt) {
+      session.firstUserMessage = msg.prompt.slice(0, 200);
+      if (session.title === "New chat") session.title = msg.prompt.slice(0, 60);
     }
 
-    busy = true;
     try {
       const finalSessionId = await runAgent({
-        agent,
+        engine,
         userPrompt: msg.prompt ?? "",
-        resumeSessionId: sessionId,
+        resumeSessionId: session.agentSessionId,
         onEvent: (evt) => {
           if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(evt));
         },
+        canUseTool: async (toolName: string, input: Record<string, unknown>) => {
+          const reqId = Math.random().toString(36).slice(2);
+          return new Promise<PermissionDecision>((resolve) => {
+            pendingPermissions.set(reqId, resolve);
+            if (ws.readyState === ws.OPEN) {
+              ws.send(
+                JSON.stringify({ type: "permission_request", id: reqId, toolName, input })
+              );
+            } else {
+              pendingPermissions.delete(reqId);
+              resolve({ behavior: "deny", message: "client not connected" });
+            }
+          });
+        },
       });
-      if (finalSessionId) sessionId = finalSessionId;
+      if (finalSessionId) session.agentSessionId = finalSessionId;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (ws.readyState === ws.OPEN) {
         ws.send(JSON.stringify({ type: "error", error: message }));
       }
     } finally {
-      busy = false;
+      session.busy = false;
+      touchSession(session.id);
     }
   });
 });

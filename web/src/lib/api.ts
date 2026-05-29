@@ -1,31 +1,84 @@
-export interface AgentConfig {
+export interface Engine {
   id: string;
   name: string;
   description: string;
-  systemPrompt: string;
-  allowedTools: string[];
+  available: boolean;
 }
 
-export async function fetchAgents(): Promise<AgentConfig[]> {
-  const r = await fetch("/api/agents");
-  if (!r.ok) throw new Error(`fetchAgents: ${r.status}`);
+export interface SessionSummary {
+  id: string;
+  engineId: string;
+  title: string;
+  createdAt: string;
+  lastActivityAt: string;
+  busy: boolean;
+  firstUserMessage?: string;
+  connected: boolean;
+}
+
+export async function fetchEngines(): Promise<Engine[]> {
+  const r = await fetch("/api/engines");
+  if (!r.ok) throw new Error(`fetchEngines: ${r.status}`);
+  const body = (await r.json()) as { items: Engine[] };
+  return body.items;
+}
+
+export async function fetchEngine(id: string): Promise<Engine> {
+  const r = await fetch(`/api/engines/${id}`);
+  if (!r.ok) throw new Error(`fetchEngine: ${r.status}`);
   return r.json();
 }
 
-export async function fetchAgent(id: string): Promise<AgentConfig> {
-  const r = await fetch(`/api/agents/${id}`);
-  if (!r.ok) throw new Error(`fetchAgent: ${r.status}`);
-  return r.json();
+export async function fetchSessions(engineId: string): Promise<SessionSummary[]> {
+  const r = await fetch(`/api/engines/${engineId}/sessions`);
+  if (!r.ok) throw new Error(`fetchSessions: ${r.status}`);
+  const body = (await r.json()) as { items: SessionSummary[] };
+  return body.items;
+}
+
+export async function createSession(engineId: string, title?: string): Promise<SessionSummary> {
+  const r = await fetch(`/api/engines/${engineId}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  if (!r.ok) throw new Error(`createSession: ${r.status}`);
+  const body = (await r.json()) as { session: SessionSummary };
+  return body.session;
+}
+
+export async function deleteSession(id: string): Promise<void> {
+  const r = await fetch(`/api/sessions/${id}`, { method: "DELETE" });
+  if (!r.ok) throw new Error(`deleteSession: ${r.status}`);
 }
 
 export type RunEvent =
-  | { type: "started"; agentId: string; sessionId?: string }
+  | { type: "session_open"; sessionId: string }
+  | { type: "started"; engineId: string; sessionId?: string }
   | { type: "text"; text: string }
-  | { type: "tool_use"; name: string; input: unknown }
+  | { type: "tool_use"; name: string; input: unknown; id?: string }
   | { type: "tool_result"; output: unknown }
+  | { type: "permission_request"; id: string; toolName: string; input: unknown }
   | { type: "done"; result?: string; sessionId?: string }
   | { type: "error"; error: string }
   | { type: "reset_ack" };
+
+export function openSessionSocket(
+  sessionId: string,
+  onEvent: (evt: RunEvent) => void
+): WebSocket {
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${window.location.host}/ws/session/${sessionId}`);
+  ws.onmessage = (e) => {
+    try {
+      onEvent(JSON.parse(e.data));
+    } catch {
+      onEvent({ type: "error", error: "bad message" });
+    }
+  };
+  ws.onerror = () => onEvent({ type: "error", error: "socket error" });
+  return ws;
+}
 
 export type CiStatus = "success" | "failure" | "pending" | "none";
 export type ReviewStatus = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | "NONE";
@@ -151,16 +204,3 @@ export async function fetchTicketProgress(
   return body;
 }
 
-export function openRunSocket(onEvent: (evt: RunEvent) => void): WebSocket {
-  const proto = window.location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${window.location.host}/ws`);
-  ws.onmessage = (e) => {
-    try {
-      onEvent(JSON.parse(e.data));
-    } catch {
-      onEvent({ type: "error", error: "bad message" });
-    }
-  };
-  ws.onerror = () => onEvent({ type: "error", error: "socket error" });
-  return ws;
-}
