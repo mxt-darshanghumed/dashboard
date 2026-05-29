@@ -34,6 +34,7 @@ import type { PullRequestItem } from "./github.js";
 import { listMyActiveJiraIssues, getJiraIssue } from "./jira.js";
 import { analyzeTicketProgress, findLinkedPRs } from "./progress.js";
 import { findLocalWorkForTicket } from "./localGit.js";
+import { tokens as countTokensOffline, compress, isOllamaAvailable, getOllamaConfig } from "./compressor.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const app = express();
@@ -42,6 +43,30 @@ app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
+});
+
+app.post("/api/tokens/count", (req, res) => {
+  const text = req.body?.text;
+  if (typeof text !== "string") return res.status(400).json({ error: "text required" });
+  res.json({ tokens: countTokensOffline(text), approximate: true });
+});
+
+app.post("/api/compress", async (req, res) => {
+  const text = req.body?.text;
+  const mode = req.body?.mode === "smart" ? "smart" : "rules";
+  if (typeof text !== "string") return res.status(400).json({ error: "text required" });
+  try {
+    const result = await compress(text, mode);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get("/api/compress/status", async (_req, res) => {
+  const { url, model } = getOllamaConfig();
+  const available = await isOllamaAvailable();
+  res.json({ ollama: { available, url, model } });
 });
 
 app.get("/api/engines", (_req, res) => {

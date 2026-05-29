@@ -87,6 +87,51 @@ export async function fetchSessionMessages(id: string): Promise<StoredMessage[]>
   return body.messages;
 }
 
+export interface CompressionResult {
+  original: string;
+  compressed: string;
+  originalTokens: number;
+  compressedTokens: number;
+  saved: number;
+  percent: number;
+  mode: "rules" | "smart";
+  notes?: string;
+}
+
+export async function countTokens(text: string): Promise<number> {
+  const r = await fetch("/api/tokens/count", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!r.ok) return 0;
+  const body = (await r.json()) as { tokens: number };
+  return body.tokens;
+}
+
+export async function compressPrompt(
+  text: string,
+  mode: "rules" | "smart"
+): Promise<CompressionResult> {
+  const r = await fetch("/api/compress", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, mode }),
+  });
+  if (!r.ok) throw new Error(`compress: ${r.status}`);
+  return r.json();
+}
+
+export interface CompressStatus {
+  ollama: { available: boolean; url: string; model: string };
+}
+
+export async function fetchCompressStatus(): Promise<CompressStatus> {
+  const r = await fetch("/api/compress/status");
+  if (!r.ok) throw new Error(`compress/status: ${r.status}`);
+  return r.json();
+}
+
 export type RunEvent =
   | { type: "session_open"; sessionId: string }
   | { type: "history"; messages: StoredMessage[] }

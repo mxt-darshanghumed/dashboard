@@ -17,6 +17,9 @@ import {
   CornerUpLeft,
   ChevronDown,
   ChevronRight,
+  Sparkles,
+  Wand2,
+  Undo2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -25,6 +28,9 @@ import {
   openSessionSocket,
   fetchSessionMessages,
   renameSession,
+  countTokens,
+  compressPrompt,
+  fetchCompressStatus,
   type RunEvent,
   type StoredAssistantBlock,
   type StoredMessage,
@@ -60,6 +66,64 @@ export function SessionChat() {
   const titleInputRef = useRef<HTMLInputElement | null>(null);
 
   const [reconnectKey, setReconnectKey] = useState(0);
+
+  // Token counter + compression
+  const [tokenCount, setTokenCount] = useState(0);
+  const [compressing, setCompressing] = useState<"rules" | "smart" | null>(null);
+  const [lastCompression, setLastCompression] = useState<{
+    original: string;
+    compressed: string;
+    originalTokens: number;
+    compressedTokens: number;
+    percent: number;
+    notes?: string;
+  } | null>(null);
+  const [ollamaAvailable, setOllamaAvailable] = useState<boolean | null>(null);
+
+  // Live token count (debounced)
+  useEffect(() => {
+    if (!input) {
+      setTokenCount(0);
+      return;
+    }
+    const handle = setTimeout(() => {
+      countTokens(input).then(setTokenCount).catch(() => {});
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [input]);
+
+  useEffect(() => {
+    fetchCompressStatus()
+      .then((s) => setOllamaAvailable(s.ollama.available))
+      .catch(() => setOllamaAvailable(false));
+  }, []);
+
+  async function runCompress(mode: "rules" | "smart") {
+    if (!input.trim() || compressing) return;
+    setCompressing(mode);
+    try {
+      const result = await compressPrompt(input, mode);
+      setLastCompression({
+        original: result.original,
+        compressed: result.compressed,
+        originalTokens: result.originalTokens,
+        compressedTokens: result.compressedTokens,
+        percent: result.percent,
+        notes: result.notes,
+      });
+      setInput(result.compressed);
+    } catch {
+      /* show no-op */
+    } finally {
+      setCompressing(null);
+    }
+  }
+
+  function undoCompression() {
+    if (!lastCompression) return;
+    setInput(lastCompression.original);
+    setLastCompression(null);
+  }
 
   useEffect(() => {
     if (!sessionId) return;
@@ -422,7 +486,12 @@ export function SessionChat() {
             <textarea
               ref={textareaRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                if (lastCompression && e.target.value !== lastCompression.compressed) {
+                  setLastCompression(null);
+                }
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -438,9 +507,84 @@ export function SessionChat() {
               {streaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </Button>
           </div>
-          <div className="mt-1.5 text-[10px] text-[var(--color-fg-dim)] font-mono">
-            Enter to send · Shift+Enter for newline · Hover a message to Reply
+
+          <div className="mt-1.5 flex items-center gap-2 text-[10px] text-[var(--color-fg-dim)] font-mono flex-wrap">
+            <span>Enter to send · Shift+Enter newline · Hover msg to reply</span>
+            <span className="ml-auto inline-flex items-center gap-1">
+              <span className="text-[var(--color-fg-muted)]">~{tokenCount}</span>
+              <span>tokens</span>
+            </span>
+            {input.trim() && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => runCompress("rules")}
+                  disabled={!!compressing}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[var(--color-border-subtle)] hover:border-[var(--color-fg-dim)] text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] transition-colors disabled:opacity-50"
+                  title="Strip fillers, collapse whitespace (instant, offline)"
+                >
+                  {compressing === "rules" ? (
+                    <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                  ) : (
+                    <Wand2 className="w-2.5 h-2.5" />
+                  )}
+                  Rules
+                </button>
+                <button
+                  type="button"
+                  onClick={() => runCompress("smart")}
+                  disabled={!!compressing || ollamaAvailable === false}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[var(--color-border-subtle)] hover:border-[var(--color-accent)] text-[var(--color-fg-muted)] hover:text-[var(--color-accent)] transition-colors disabled:opacity-40"
+                  title={
+                    ollamaAvailable === false
+                      ? "Smart compress requires Ollama running locally. Install with: winget install Ollama.Ollama, then: ollama pull qwen2.5:1.5b"
+                      : "Rewrite via local LLM (Ollama)"
+                  }
+                >
+                  {compressing === "smart" ? (
+                    <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-2.5 h-2.5" />
+                  )}
+                  Smart
+                </button>
+              </>
+            )}
+            {lastCompression && (
+              <button
+                type="button"
+                onClick={undoCompression}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-[var(--color-border-subtle)] hover:border-[var(--color-fg-dim)] text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] transition-colors"
+              >
+                <Undo2 className="w-2.5 h-2.5" />
+                Undo
+              </button>
+            )}
           </div>
+
+          {lastCompression && (
+            <div className="mt-1 text-[10px] font-mono flex items-center gap-2 flex-wrap">
+              <span className="text-[var(--color-fg-dim)]">compressed</span>
+              <span className="text-[var(--color-fg-muted)]">
+                {lastCompression.originalTokens} → {lastCompression.compressedTokens}
+              </span>
+              <span
+                className={cn(
+                  "font-semibold",
+                  lastCompression.percent > 0
+                    ? "text-[var(--color-success)]"
+                    : "text-[var(--color-fg-dim)]"
+                )}
+              >
+                {lastCompression.percent > 0 ? `-${lastCompression.percent}%` : "no savings"}
+              </span>
+              {lastCompression.notes && (
+                <span className="text-[var(--color-warning)] italic">
+                  {lastCompression.notes}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
