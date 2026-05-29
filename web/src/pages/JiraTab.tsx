@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { LayoutGroup, motion } from "framer-motion";
@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import {
   fetchJiraIssues,
   fetchPRs,
+  searchJiraIssues,
   ApiError,
   type JiraIssueItem,
   type JiraPriority,
@@ -58,6 +59,40 @@ export function JiraTab() {
   const [search, setSearch] = useState("");
   const [statusFilters, setStatusFilters] = useState<Set<string>>(new Set());
   const [prFilter, setPrFilter] = useState<PrFilter>("all");
+
+  // Global Jira search (across all assignees)
+  const [globalSearch, setGlobalSearch] = useState("");
+  const [globalResults, setGlobalResults] = useState<JiraIssueItem[] | null>(null);
+  const [globalSearching, setGlobalSearching] = useState(false);
+  const [globalError, setGlobalError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!globalSearch.trim()) {
+      setGlobalResults(null);
+      setGlobalError(null);
+      return;
+    }
+    let cancelled = false;
+    setGlobalSearching(true);
+    setGlobalError(null);
+    const handle = setTimeout(async () => {
+      try {
+        const r = await searchJiraIssues(globalSearch);
+        if (!cancelled) setGlobalResults(r.items);
+      } catch (err) {
+        if (!cancelled) {
+          setGlobalError(err instanceof ApiError ? err.payload.message : (err as Error).message);
+          setGlobalResults([]);
+        }
+      } finally {
+        if (!cancelled) setGlobalSearching(false);
+      }
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [globalSearch]);
 
   const allStatuses = useMemo(() => {
     const m = new Map<string, { name: string; category: JiraStatusCategory; count: number }>();
@@ -141,6 +176,14 @@ export function JiraTab() {
           Refresh
         </Button>
       </div>
+
+      <GlobalJiraSearch
+        value={globalSearch}
+        onChange={setGlobalSearch}
+        results={globalResults}
+        searching={globalSearching}
+        error={globalError}
+      />
 
       {apiError && (
         <Card className="mb-6 border-[color-mix(in_oklch,var(--color-danger)_40%,transparent)]">
@@ -307,6 +350,112 @@ export function JiraTab() {
       )}
     </div>
   );
+}
+
+function GlobalJiraSearch({
+  value,
+  onChange,
+  results,
+  searching,
+  error,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  results: JiraIssueItem[] | null;
+  searching: boolean;
+  error: string | null;
+}) {
+  return (
+    <div className="mb-6">
+      <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--color-fg-dim)] font-medium mb-2 flex items-center gap-1.5">
+        <Search className="w-3 h-3" /> Find any ticket (across all assignees)
+      </div>
+      <div className="relative max-w-2xl">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--color-fg-dim)]" />
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Search by key (MXTS-12345) or text…"
+          className="w-full h-10 pl-9 pr-9 bg-[var(--color-bg-elevated)] border border-[var(--color-border-subtle)] rounded-[var(--radius-md)] text-sm placeholder:text-[var(--color-fg-dim)] focus:outline-none focus:border-[var(--color-fg-dim)] transition-colors"
+        />
+        {value && (
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-[var(--color-fg-dim)] hover:text-[var(--color-fg)] hover:bg-[var(--color-bg-hover)]"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+        {searching && (
+          <Loader2 className="absolute right-9 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin text-[var(--color-fg-dim)]" />
+        )}
+      </div>
+      {error && (
+        <div className="mt-2 max-w-2xl px-3 py-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklch,var(--color-danger)_35%,transparent)] bg-[color-mix(in_oklch,var(--color-danger)_8%,transparent)] text-xs text-[var(--color-danger)]">
+          {error}
+        </div>
+      )}
+      {results && !searching && (
+        <div className="mt-2 max-w-2xl card-surface divide-y divide-[var(--color-border-subtle)] overflow-hidden">
+          {results.length === 0 ? (
+            <div className="px-4 py-3 text-xs text-[var(--color-fg-dim)] italic">No tickets match.</div>
+          ) : (
+            results.map((issue) => <SearchResultRow key={issue.key} issue={issue} />)
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SearchResultRow({ issue }: { issue: JiraIssueItem }) {
+  return (
+    <Link
+      to={`/jira/${issue.key}`}
+      className="block px-4 py-2.5 hover:bg-[var(--color-bg-elevated)] transition-colors group"
+    >
+      <div className="flex items-start gap-3">
+        {issue.issueTypeIconUrl ? (
+          <img src={issue.issueTypeIconUrl} alt="" className="w-4 h-4 mt-0.5 shrink-0" />
+        ) : (
+          <Ticket className="w-4 h-4 mt-0.5 shrink-0 text-[var(--color-fg-dim)]" />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <span className="font-mono text-[11px] text-[var(--color-fg-dim)]">{issue.key}</span>
+            <span className="text-sm text-[var(--color-fg)] truncate">{issue.summary}</span>
+          </div>
+          <div className="mt-1 flex items-center gap-2 text-[11px] flex-wrap">
+            <StatusPill name={issue.statusName} category={issue.statusCategory} />
+            {issue.assignee ? (
+              <span className="inline-flex items-center gap-1 text-[var(--color-fg-muted)]">
+                {issue.assignee.avatarUrl && (
+                  <img src={issue.assignee.avatarUrl} alt="" className="w-3.5 h-3.5 rounded-full" />
+                )}
+                <span>{issue.assignee.displayName}</span>
+              </span>
+            ) : (
+              <span className="text-[var(--color-fg-dim)] italic">unassigned</span>
+            )}
+            <span className="text-[var(--color-fg-dim)] font-mono">· {searchTimeAgo(issue.updated)}</span>
+          </div>
+        </div>
+        <ArrowUpRight className="w-3.5 h-3.5 mt-1 text-[var(--color-fg-dim)] group-hover:text-[var(--color-fg)] transition-colors shrink-0" />
+      </div>
+    </Link>
+  );
+}
+
+function searchTimeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.round(diff / 60_000);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 30) return `${d}d ago`;
+  return `${Math.round(d / 30)}mo ago`;
 }
 
 function AnimatedTile({

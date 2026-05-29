@@ -232,10 +232,18 @@ export interface JiraIssueItem {
   issueTypeIconUrl: string;
   projectKey: string;
   updated: string;
+  assignee?: { displayName: string; avatarUrl: string } | null;
 }
 
 export async function fetchJiraIssues(): Promise<{ items: JiraIssueItem[] }> {
   const r = await fetch("/api/jira/issues");
+  const body = await r.json();
+  if (!r.ok) throw new ApiError(body.error);
+  return body;
+}
+
+export async function searchJiraIssues(query: string): Promise<{ items: JiraIssueItem[] }> {
+  const r = await fetch(`/api/jira/search?q=${encodeURIComponent(query)}`);
   const body = await r.json();
   if (!r.ok) throw new ApiError(body.error);
   return body;

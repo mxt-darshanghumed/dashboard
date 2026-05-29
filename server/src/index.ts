@@ -31,7 +31,7 @@ import {
 } from "./sessions.js";
 import { listMyOpenPRs, searchPRsForTicketKey } from "./github.js";
 import type { PullRequestItem } from "./github.js";
-import { listMyActiveJiraIssues, getJiraIssue } from "./jira.js";
+import { listMyActiveJiraIssues, getJiraIssue, searchJiraIssues } from "./jira.js";
 import { analyzeTicketProgress, findLinkedPRs } from "./progress.js";
 import { findLocalWorkForTicket } from "./localGit.js";
 import { tokens as countTokensOffline, compress, isOllamaAvailable, getOllamaConfig } from "./compressor.js";
@@ -130,6 +130,17 @@ app.get("/api/prs", async (_req, res) => {
 
 app.get("/api/jira/issues", async (_req, res) => {
   const result = await listMyActiveJiraIssues();
+  if (result.ok) {
+    res.json({ items: result.items });
+  } else {
+    res.status(result.error.kind === "unknown" ? 500 : 400).json({ error: result.error });
+  }
+});
+
+app.get("/api/jira/search", async (req, res) => {
+  const q = typeof req.query.q === "string" ? req.query.q : "";
+  if (!q.trim()) return res.json({ items: [] });
+  const result = await searchJiraIssues(q);
   if (result.ok) {
     res.json({ items: result.items });
   } else {

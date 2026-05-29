@@ -12,6 +12,7 @@ export interface JiraIssueItem {
   issueTypeIconUrl: string;
   projectKey: string;
   updated: string;
+  assignee?: { displayName: string; avatarUrl: string } | null;
 }
 
 export interface JiraError {
@@ -379,4 +380,79 @@ export async function getJiraIssue(
   };
 
   return { ok: true, issue };
+}
+
+interface JiraSearchApiIssue extends JiraApiIssue {
+  fields: JiraApiIssue["fields"] & { assignee?: JiraApiUser | null };
+}
+
+const TICKET_KEY_PATTERN = /^[A-Z][A-Z0-9]+-\d+$/i;
+
+function escapeJqlString(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+export async function searchJiraIssues(
+  query: string,
+  options: { limit?: number } = {}
+): Promise<{ ok: true; items: JiraIssueItem[] } | { ok: false; error: JiraError }> {
+  const trimmed = query.trim();
+  if (!trimmed) return { ok: true, items: [] };
+
+  const authResult = await buildAuth();
+  if (!authResult.ok) return authResult;
+  const { auth } = authResult;
+
+  const isKey = TICKET_KEY_PATTERN.test(trimmed);
+  const jql = isKey
+    ? `key = "${trimmed.toUpperCase()}"`
+    : `(summary ~ "${escapeJqlString(trimmed)}" OR text ~ "${escapeJqlString(trimmed)}") ORDER BY updated DESC`;
+
+  console.log(`[jira] search: ${jql}`);
+
+  let response: Response;
+  try {
+    response = await fetch(`${auth.apiBase}/search/jql`, {
+      method: "POST",
+      headers: {
+        Authorization: auth.authHeader,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jql,
+        fields: ["summary", "status", "priority", "issuetype", "project", "updated", "assignee"],
+        maxResults: options.limit ?? 25,
+      }),
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      error: { kind: "network", message: err instanceof Error ? err.message : String(err) },
+    };
+  }
+
+  if (!response.ok) {
+    return { ok: false, error: handleHttpError(response, await response.text()) };
+  }
+
+  const body = (await response.json()) as { issues?: JiraSearchApiIssue[] };
+  const items: JiraIssueItem[] = (body.issues ?? []).map((i) => {
+    const categoryKey = i.fields.status.statusCategory.key.toLowerCase();
+    return {
+      key: i.key,
+      url: `https://${auth.site}/browse/${i.key}`,
+      summary: i.fields.summary,
+      statusName: i.fields.status.name,
+      statusCategory: STATUS_CATEGORY_MAP[categoryKey] ?? "unknown",
+      priority: normalizePriority(i.fields.priority?.name),
+      issueType: i.fields.issuetype?.name ?? "Task",
+      issueTypeIconUrl: i.fields.issuetype?.iconUrl ?? "",
+      projectKey: i.fields.project.key,
+      updated: i.fields.updated,
+      assignee: mapUser(i.fields.assignee),
+    };
+  });
+
+  return { ok: true, items };
 }
