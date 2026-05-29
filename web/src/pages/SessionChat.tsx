@@ -115,11 +115,12 @@ export function SessionChat() {
     if (evt.type === "assistant_recorded") {
       setTurns((prev) => {
         const last = prev[prev.length - 1];
-        if (last?.role === "assistant" && last.streaming) {
-          // replace placeholder with canonical version
-          return [...prev.slice(0, -1), { ...messageToTurn(evt.message) }];
+        // Replace the last assistant turn with the canonical server version.
+        // The previous `done` event has already flipped streaming off; that's
+        // expected here. Replacing avoids duplicating the message.
+        if (last?.role === "assistant") {
+          return [...prev.slice(0, -1), messageToTurn(evt.message)];
         }
-        // assistant message from server we didn't have — append
         return [...prev, messageToTurn(evt.message)];
       });
       return;
