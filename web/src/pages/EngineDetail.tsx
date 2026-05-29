@@ -9,6 +9,7 @@ import {
   Loader2,
   Wifi,
   WifiOff,
+  Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
@@ -105,8 +106,9 @@ export function EngineDetail() {
         </Card>
       )}
 
-      <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--color-fg-dim)] font-medium mb-3">
-        Sessions {sessions.length > 0 && <span className="font-mono ml-1">{sessions.length}</span>}
+      <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--color-fg-dim)] font-medium mb-3 flex items-center gap-3">
+        <span>Sessions {sessions.length > 0 && <span className="font-mono ml-1">{sessions.length}</span>}</span>
+        <UnseenSummary sessions={sessions} />
       </div>
 
       {sessions.length === 0 ? (
@@ -127,6 +129,28 @@ export function EngineDetail() {
   );
 }
 
+function UnseenSummary({ sessions }: { sessions: SessionSummary[] }) {
+  const count = sessions.filter((s) => {
+    if (s.busy) return false;
+    let lastSeen: string | null = null;
+    try {
+      lastSeen = localStorage.getItem(`cockpit:lastSeen:${s.id}`);
+    } catch {
+      lastSeen = null;
+    }
+    if (!lastSeen) return false;
+    return new Date(s.lastActivityAt).getTime() > new Date(lastSeen).getTime();
+  }).length;
+
+  if (count === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-1 px-2 h-5 rounded-full text-[10px] font-mono normal-case tracking-normal text-[var(--color-success)] border border-[color-mix(in_oklch,var(--color-success)_45%,transparent)] bg-[color-mix(in_oklch,var(--color-success)_10%,transparent)]">
+      <Sparkles className="w-2.5 h-2.5" />
+      {count} ready
+    </span>
+  );
+}
+
 function SessionRow({
   engineId,
   session,
@@ -136,13 +160,30 @@ function SessionRow({
   session: SessionSummary;
   onDelete: () => void;
 }) {
+  const lastSeenStr = (() => {
+    try {
+      return localStorage.getItem(`cockpit:lastSeen:${session.id}`);
+    } catch {
+      return null;
+    }
+  })();
+  const hasUnseen =
+    !session.busy &&
+    !!lastSeenStr &&
+    new Date(session.lastActivityAt).getTime() > new Date(lastSeenStr).getTime();
+
   return (
     <Link
       to={`/engine/${engineId}/session/${session.id}`}
       className="group block px-4 py-3 hover:bg-[var(--color-bg-elevated)] transition-colors"
     >
       <div className="flex items-start gap-3">
-        <MessageSquare className="w-4 h-4 mt-1 shrink-0 text-[var(--color-fg-muted)]" />
+        <MessageSquare
+          className={cn(
+            "w-4 h-4 mt-1 shrink-0",
+            hasUnseen ? "text-[var(--color-success)]" : "text-[var(--color-fg-muted)]"
+          )}
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-[var(--color-fg)] truncate text-sm">
@@ -151,6 +192,11 @@ function SessionRow({
             {session.busy && (
               <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.14em] font-medium text-[var(--color-accent)] border border-[color-mix(in_oklch,var(--color-accent)_40%,transparent)] bg-[color-mix(in_oklch,var(--color-accent)_8%,transparent)] rounded-full px-1.5 py-0.5">
                 <Loader2 className="w-2.5 h-2.5 animate-spin" /> running
+              </span>
+            )}
+            {hasUnseen && (
+              <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.14em] font-medium text-[var(--color-success)] border border-[color-mix(in_oklch,var(--color-success)_45%,transparent)] bg-[color-mix(in_oklch,var(--color-success)_10%,transparent)] rounded-full px-1.5 py-0.5">
+                <Sparkles className="w-2.5 h-2.5" /> result ready
               </span>
             )}
             <span
@@ -170,6 +216,9 @@ function SessionRow({
           )}
           <div className="mt-1.5 text-[11px] text-[var(--color-fg-dim)] font-mono">
             updated {timeAgo(session.lastActivityAt)}
+            {typeof session.messageCount === "number" && session.messageCount > 0 && (
+              <> · {session.messageCount} msg{session.messageCount === 1 ? "" : "s"}</>
+            )}
           </div>
         </div>
         <button

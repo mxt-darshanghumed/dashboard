@@ -129,12 +129,23 @@ export function SessionChat() {
     if (!sessionId) return;
     fetchSessionMessages(sessionId)
       .then((messages) => {
-        const initial = messages.map(messageToTurn);
-        setTurns(initial);
+        // Don't clobber if WS already populated turns (history event won the race).
+        setTurns((prev) => (prev.length > 0 ? prev : messages.map(messageToTurn)));
         setHistoryLoaded(true);
       })
       .catch(() => setHistoryLoaded(true));
   }, [sessionId]);
+
+  // Mark this session as "seen up to now" whenever the chat is open and turns
+  // change — this drives the "ready" indicator on the engine page.
+  useEffect(() => {
+    if (!sessionId) return;
+    try {
+      localStorage.setItem(`cockpit:lastSeen:${sessionId}`, new Date().toISOString());
+    } catch {
+      /* ignore quota */
+    }
+  }, [sessionId, turns]);
 
   useEffect(() => {
     if (!sessionId) return;
